@@ -1,7 +1,4 @@
-<<<<<<< HEAD
 
-=======
->>>>>>> d930eb8ba15276d3bb118be1911c99f097159ed7
 from setuptools import setup, find_packages
 setup(
     name='CallCenterSim',
