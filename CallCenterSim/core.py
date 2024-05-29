@@ -1,8 +1,8 @@
-import random
-import math
-import pandas as pd
-import numpy as np
-import time
+# import random
+# import math
+# import pandas as pd
+# import numpy as np
+# import time
 normal_customers_percentage = 0.7
 impatient_customers_percentage = 0.15
 technical_need_percentage = 0.15
