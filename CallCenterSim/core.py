@@ -13,7 +13,7 @@ overwork_time = 8*60
 shift_time_1 = 8*60
 shift_time_2 = 16*60
 print("success")
-def Exponential(lambd):
+def Exponential(lambd): 
     r = np.random.random()
     return -(1 / lambd) * math.log(r)
 
