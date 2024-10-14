@@ -1,735 +1,457 @@
-import random
-import math
-import pandas as pd
 import numpy as np
+from scipy.spatial import distance
+import random
+import pandas as pd
+pd.options.mode.chained_assignment = None  # default='warn'
+from sklearn.metrics import silhouette_score
+import numpy as np
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.spatial.distance import pdist
 import time
-normal_customers_percentage = 0.7
-impatient_customers_percentage = 0.15
-technical_need_percentage = 0.15
-num_of_specialists = 4
-num_of_beginners = 36
-num_of_technicals =  24
-overwork_time = 8*60
-shift_time_1 = 8*60
-shift_time_2 = 16*60
-warmup_point = 0
-print("success")
-def Exponential(lambd): 
-    r = np.random.random()
-    return -(1 / lambd) * math.log(r)
+import json
+from scipy.cluster import hierarchy
+def merge_list(list_of_list):
+    list_final = []
+    for i in list_of_list:
+        list_final += i    
+    return list(set(list_final))
 
 
-def Uniform(a, b):
-    r = np.random.random()
-    return a + (b - a) * r
-
-
-
-# starting state function, does sum initial work like definig variables and also initializes our variables.
-def starting_state():
-
-    # State variables
-    state = dict()
-    state['Special Customer Queue Length'] = 0 # To store length of special customers in the very first queue
-    state['Normal Customer Queue Length'] = 0 # To store length of normal customers in the very first queue
-    state['Technical Special Customer Queue Length'] = 0 # To store length of special customers in technical queue
-    state['Technical Normal Customer Queue Length'] = 0 # To store length of normal customers in technical queue
-    state['Specialist Server Status'] = 0  # 0: Free, 1:one Busy, 2: two busy
-    state['Beginner Server Status'] = 0 # 0: Free, 1:one Busy, 2: two busy, 3: three busy
-    state['Technical Server Status'] = 0 # 0: Free, 1:one Busy, 2: two busy
-
-    # Data: will save everything
-    data = dict()
-    data['Special Customers'] = dict()  # To track each special customer, saving their arrival time, time service begins, etc.
-    data['Normal Customers'] = dict() # To track each normal customer, saving their arrival time, time service begins, etc.
-    data['Last Time Special Customer Queue Length Changed'] = 0
-    data['Last Time Normal Customer Queue Length Changed'] = 0
-    data['Last Time Technical Special Customer Queue Length Changed'] = 0
-    data['Last Time Technical Normal Customer Queue Length Changed'] = 0
-    # To check which customer has first arrived, we store them in a dictionary and for each line in a distinct dictionary
-    data['Special Queue Customers'] = dict()
-    data['Normal Queue Customers'] = dict()
-    data['Technical Special Queue Customers'] = dict()
-    data['Technical Normal Queue Customers'] = dict()
-
-    # Cumulative Stats
-    data['Cumulative Stats'] = dict()
-    
-    # Stores last time time each operator group serviced
-    data['Cumulative Stats']['Specialist Servers Last Time'] = 0
-    data['Cumulative Stats']['Beginner Servers Last Time'] = 0
-    data['Cumulative Stats']['Technical Servers Last Time'] = 0
-    
-    
-    # Stores busy time in order to calculate utilization
-    data['Cumulative Stats']['Specialist Servers Busy Time'] = 0
-    data['Cumulative Stats']['Beginner Servers Busy Time'] = 0
-    data['Cumulative Stats']['Technical Servers Busy Time'] = 0
-    
-    #Stores OverWork of operators
-    # yakhoda
-    data['Cumulative Stats']['Specialist Servers Overworked'] = 0
-    data['Cumulative Stats']['Beginner Servers Overworked'] = 0
-    data['Cumulative Stats']['Technical Servers Overworked'] = 0    
-    
-    
-    # Stores waiting times, each line and each customer distinctly
-    data['Cumulative Stats']['Special Queue Waiting Time'] = 0
-    data['Cumulative Stats']['Normal Queue Waiting Time'] = 0
-    data['Cumulative Stats']['Technical Special Queue Waiting Time'] = 0
-    data['Cumulative Stats']['Technical Normal Queue Waiting Time'] = 0
-    # Stores area under queue length, each line and each customer distinctly
-    data['Cumulative Stats']['Area Under Special Queue Length Curve'] = 0
-    data['Cumulative Stats']['Area Under Normal Queue Length Curve'] = 0
-    data['Cumulative Stats']['Area Under Technical Special Queue Length Curve'] = 0
-    data['Cumulative Stats']['Area Under Technical Normal Queue Length Curve'] = 0
-    # stores immediate service tarters in each line. At the end we implement union on these sets to get general srvice starters.
-    data['Special Service Starters'] = set()
-    data['Special Service Starters Technical'] = set()
-    # Stores customers who left the system and probably left us.
-    data['Cumulative Stats']['Customer Churn'] = 0
-    # Stores maximums legnths, each line and each kind distinctly
-    data['Cumulative Stats']['Max Special Customer Queue Length'] = 0
-    data['Cumulative Stats']['Max Normal Customer Queue Length'] = 0
-    data['Cumulative Stats']['Max Technical Special Customer Queue Length'] = 0
-    data['Cumulative Stats']['Max Technical Normal Customer Queue Length'] = 0
-    data['Cumulative Stats']['Max Technical Normal Customer Queue Length'] = 0
-    # Stores customers of each line and each kind distinctly
-    data['Special Queue Customers All'] = set()
-    data['Normal Queue Customers All'] = set()
-    data['Technical Special Queue Customers All'] = set()
-    data['Technical Normal Queue Customers All'] = set()
-    data['Special Customers Waiting Time In System'] = 0
-    data['Normal Customers Waiting Time In System'] = 0
-    #Yakhoda
-
-    # Stores maximums waiting times, each line and each kind distinctly
-    data['Cumulative Stats']['Max Special Customer Queue Waiting Time'] = 0
-    data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] = 0
-    data['Cumulative Stats']['Max Technical Special Customer Queue Waiting Time'] = 0
-    data['Cumulative Stats']['Max Technical Normal Customer Queue Waiting Time'] = 0
-
-
-    # Starting FEL
-    future_event_list = list()
-    if Uniform(0, 1) > normal_customers_percentage:
-        future_event_list.append(
-            {'Event Type': 'Customer Call', 'Event Time': 0, 'Special Customer': 'S1', 'Normal Customer': 'C0',
-             'Last Customer': 'S'})
-    else:
-        future_event_list.append(
-            {'Event Type': 'Customer Call', 'Event Time': 0, 'Special Customer': 'S0', 'Normal Customer': 'C1',
-             'Last Customer': 'C'})
-
-    return state, future_event_list, data,
-
-# we use this function to make our events with theirs specific features.
-def fel_maker(future_event_list, event_type, state, data, clock, customer_special=None,
-              customer_normal=None,
-              last_customer=None):
-    event_time = 0
-
-    if event_type == 'Customer Call':
-        if clock % 1440 < shift_time_1: 
-            shift = 1
-        elif clock % 1440 < shift_time_2:
-            shift = 2
+def density_calc(list_base, list_point):
+    n = len(list_point)
+    list_base = list(set(list_base))
+    list_density =[]
+    list_point_final = []
+    for i in list_base:
+        if i in list_point:
+            list_density.append(list_point.count(i)/n)
+            list_point_final.append(i)
         else:
-            shift = 3
-
-        if shift == 1:
-            event_time = clock + Exponential(1 / 0.15) 
-        elif shift == 2:
-            event_time = clock + Exponential(1 / 1.2)
-        else:
-            event_time = clock + Exponential(1 / 1) 
-    elif event_type == 'Departure From Expert':
-        event_time = clock + Exponential(1 / 3) 
-    elif event_type == 'Departure From Beginner':
-        event_time = clock + Exponential(1 / 7) 
-    elif event_type == 'Departure From Technical':
-        event_time = clock + Exponential(1/10) 
-    elif event_type == 'Leaving Of Tired':
-        max_queue_length = state['Special Customer Queue Length'] - 1
-        event_time = clock + Uniform(0.5, 3) 
-
-    # According to the information given, future event will be made above and will be added to fel as follows.
-    new_event = {'Event Type': event_type, 'Event Time': event_time, 'Special Customer': customer_special,
-                 'Normal Customer': customer_normal, 'Last Customer': last_customer}
-    future_event_list.append(new_event)
+            list_density.append(0) #changed
+    return  list_point_final, list_density
 
 
-def Customer_Call(future_event_list, state, clock, data, customer_special=None, customer_normal=None,
-                  last_customer=None):
-    # we make the next arrival here.
-    if Uniform(0, 1) > normal_customers_percentage: #ASAP (Just Check if you can change this!)
-        next_customer = 'S' + str(int(customer_special[1:]) + 1)
-        fel_maker(future_event_list, 'Customer Call', state, data, clock,
-                  customer_special=next_customer,
-                  customer_normal=customer_normal, last_customer='S')
 
-    else:
-        next_customer = 'C' + str(int(customer_normal[1:]) + 1)
-        fel_maker(future_event_list, 'Customer Call', state, data, clock,
-                  customer_special=customer_special,
-                  customer_normal=next_customer, last_customer='C')
-
-    # This part is for the customer who has just arrived.
-    if last_customer == 'S':
-        # Our customer is special
-        data['Special Customers'][customer_special] = dict()
-        data['Special Customers'][customer_special]['Arrival Time'] = clock
-        data['Special Queue Customers All'].add(customer_special)
-        if state['Specialist Server Status'] < num_of_specialists: #ASAP_special
-            state['Specialist Server Status'] += 1
-            fel_maker(future_event_list, 'Departure From Expert', state, data, clock,
-                      customer_special=customer_special, customer_normal=customer_normal, last_customer='S')
-            data['Special Customers'][customer_special]['Time Service Begins'] = clock
-            data['Special Service Starters'].add(customer_special)
-        else:
-            data['Cumulative Stats']['Area Under Special Queue Length Curve'] += state[
-                                                                                     'Special Customer Queue Length'] * (
-                                                                                         clock - data[
-                                                                                     'Last Time Special Customer Queue Length Changed'])
-            state['Special Customer Queue Length'] += 1
-            if data['Cumulative Stats']['Max Special Customer Queue Length'] < state[
-                'Special Customer Queue Length']:
-                data['Cumulative Stats']['Max Special Customer Queue Length'] = state[
-                    'Special Customer Queue Length']
-            data['Special Queue Customers'][customer_special] = clock
-            data['Special Queue Customers All'].add(customer_special)
-            data['Last Time Special Customer Queue Length Changed'] = clock
-            # will he get tired?
-            if Uniform(0, 1) >= (1- impatient_customers_percentage):
-                # he will get tired
-                fel_maker(future_event_list, 'Leaving Of Tired', state, data, clock,
-                          customer_special=customer_special, customer_normal=customer_normal, last_customer='S')
-
-    elif last_customer == "C":
-        data['Normal Customers'][customer_normal] = dict()
-        data['Normal Customers'][customer_normal]['Arrival Time'] = clock
-        data['Normal Queue Customers All'].add(customer_normal)
-        if state['Beginner Server Status'] < num_of_beginners: #ASAP_beginner
-            state['Beginner Server Status'] += 1
-            fel_maker(future_event_list, 'Departure From Beginner', state, data, clock,
-                      customer_special=customer_special, customer_normal=customer_normal, last_customer='C')
-            data['Normal Customers'][customer_normal]['Time Service Begins'] = clock
-        elif state['Specialist Server Status'] < num_of_specialists: #ASAP_special
-            state['Specialist Server Status'] += 1
-            fel_maker(future_event_list, 'Departure From Expert', state, data, clock,
-                      customer_special=customer_special, customer_normal=customer_normal, last_customer='C')
-            data['Normal Customers'][customer_normal]['Time Service Begins'] = clock
-        else:
-            data['Cumulative Stats']['Area Under Normal Queue Length Curve'] += state[
-                                                                                    'Normal Customer Queue Length'] * (
-                                                                                        clock - data[
-                                                                                    'Last Time Normal Customer Queue Length Changed'])
-            state['Normal Customer Queue Length'] += 1
-            if data['Cumulative Stats']['Max Normal Customer Queue Length'] < state['Normal Customer Queue Length']:
-                data['Cumulative Stats']['Max Normal Customer Queue Length'] = state['Normal Customer Queue Length']
-            data['Normal Queue Customers'][customer_normal] = clock
-            data['Normal Queue Customers All'].add(customer_normal)
-            data['Last Time Normal Customer Queue Length Changed'] = clock
-            # will he get tired?
-            if Uniform(0, 1) >= (1- impatient_customers_percentage):
-                # he will get tired
-                fel_maker(future_event_list, 'Leaving Of Tired', state, data, clock,
-                          customer_special=customer_special, customer_normal=customer_normal, last_customer='C')
+def density_calc_list(list_of_list, list_base):
+    list_density = []
+    for i in list_of_list:
+        list_density.append(np.array([density_calc(list_base, i)[1]]).transpose())
+    return list_density
 
 
-def Departure_From_Expert(future_event_list, state, clock, data, customer_special=None,
-                          customer_normal=None,
-                          last_customer=None):
-    # what is shift number?
-    if (clock % 1440) // shift_time_1 == 0:
-        shift = 0
-    elif (clock % 1440) // shift_time_1 !=0 and (clock % 1440) // shift_time_2 ==0 :
-        shift = 1
-    else:
-        shift = 2
+def create_blank_dataset_with_metadata(m):
+    data = {
+        'system num': [],
+        'data points': [],
+    }
+
+    for i in range(1, m + 1):
+        data[f'{i-1}'] = []
+    data[f'label'] = []
+    blank_dataset = pd.DataFrame(data)
     
-    data['Cumulative Stats']['Specialist Servers Last Time'] = clock #yakhoda
-    # was it a special or normal customer?
-    if last_customer == 'S':
-        data['Cumulative Stats']['Specialist Servers Busy Time'] += clock - data['Special Customers'][customer_special][
-            'Time Service Begins']
-        if clock > overwork_time: #yakhoda
-            data['Cumulative Stats']['Specialist Servers Overworked'] += clock - data['Special Customers'][customer_special][
-            'Time Service Begins']
-        # data['Special Customers'].pop(customer_special, None)
-        # will he use technical service?
-        data['Special Customers Waiting Time In System'] += clock - data['Special Customers'][customer_special][
-            'Arrival Time']
-        if Uniform(0, 1) > (1-technical_need_percentage):
-            # he will use technical service
-            data['Special Customers'][customer_special]['Arrival Time Technical'] = clock
-            data['Technical Special Queue Customers All'].add(customer_special)
-            if state['Technical Server Status'] < num_of_technicals: #ASAP_technical
-                # technical service begins immediately
-                state['Technical Server Status'] += 1
-                fel_maker(future_event_list, 'Departure From Technical', state, data, clock,
-                          customer_special=customer_special, customer_normal=customer_normal, last_customer='S')
-                data['Special Customers'][customer_special]['Time Service Begins Technical'] = clock
-                data['Special Service Starters Technical'].add(customer_special)
-            else:
-                # gets in line in technical service
-                data['Cumulative Stats']['Area Under Technical Special Queue Length Curve'] += state[
-                                                                                                   'Technical Special Customer Queue Length'] * (
-                                                                                                       clock - data[
-                                                                                                   'Last Time Technical Special Customer Queue Length Changed'])
-                state['Technical Special Customer Queue Length'] += 1
-                if data['Cumulative Stats']['Max Technical Special Customer Queue Length'] < state[
-                    'Technical Special Customer Queue Length']:
-                    data['Cumulative Stats']['Max Technical Special Customer Queue Length'] = state[
-                        'Technical Special Customer Queue Length']
-                data['Technical Special Queue Customers'][customer_special] = clock
-                data['Technical Special Queue Customers All'].add(customer_special)
-                data['Last Time Technical Special Customer Queue Length Changed'] = clock
-    else:
-        # customer is normal
-        data['Cumulative Stats']['Specialist Servers Busy Time'] += clock - data['Normal Customers'][customer_normal][
-            'Time Service Begins']
-        if clock > overwork_time: #yakhoda
-            data['Cumulative Stats']['Specialist Servers Overworked'] += clock - data['Normal Customers'][customer_normal][
-            'Time Service Begins']
-        data['Normal Customers Waiting Time In System'] += clock - data['Normal Customers'][customer_normal][
-            'Arrival Time']
-        #Yakhoda
-        data['Normal Customers'][customer_normal]['Time Service Ends'] = clock
-        # will he use technical service?
-        if Uniform(0, 1) > (1-technical_need_percentage):
-            # he will use technical service
-            data['Normal Customers'][customer_normal]['Arrival Time Technical'] = clock
-            data['Technical Normal Queue Customers All'].add(customer_normal)
-            if state['Technical Server Status'] < num_of_technicals: #ASAP_technical
-                # technical service begins immediately
-                state['Technical Server Status'] += 1
-                fel_maker(future_event_list, 'Departure From Technical', state, data, clock,
-                          customer_special=customer_special, customer_normal=customer_normal, last_customer='C')
-                data['Normal Customers'][customer_normal]['Time Service Begins Technical'] = clock
-            else:
-                # gets in line in technical service
-                data['Cumulative Stats']['Area Under Technical Normal Queue Length Curve'] += state[
-                                                                                                  'Technical Normal Customer Queue Length'] * (
-                                                                                                      clock - data[
-                                                                                                  'Last Time Technical Normal Customer Queue Length Changed'])
-                state['Technical Normal Customer Queue Length'] += 1
-                if data['Cumulative Stats']['Max Technical Normal Customer Queue Length'] < state[
-                    'Technical Normal Customer Queue Length']:
-                    data['Cumulative Stats']['Max Technical Normal Customer Queue Length'] = state[
-                        'Technical Normal Customer Queue Length']
-                data['Technical Normal Queue Customers'][customer_normal] = clock
-                data['Technical Normal Queue Customers All'].add(customer_normal)
-                data['Last Time Technical Normal Customer Queue Length Changed'] = clock
-
-    # Now after dealing with the customer woh left, wh go further checking the lines.
-    if state['Special Customer Queue Length'] > 0:
-        # who's the first in line?
-        first_customer_in_queue = min(data['Special Queue Customers'], key=data['Special Queue Customers'].get)
-        # this customer starts getting service
-        data['Special Customers'][first_customer_in_queue]['Time Service Begins'] = clock
-        # Update queue waiting time
-        data['Cumulative Stats']['Special Queue Waiting Time'] += \
-            clock - data['Special Customers'][first_customer_in_queue]['Arrival Time']
-        if data['Cumulative Stats']['Max Special Customer Queue Waiting Time'] < clock - \
-                data['Special Customers'][first_customer_in_queue]['Arrival Time']:
-            data['Cumulative Stats']['Max Special Customer Queue Waiting Time'] = clock - data['Special Customers'][
-                first_customer_in_queue]['Arrival Time']
-        # Queue length changes, so calculate the area under the current rectangle
-        data['Cumulative Stats']['Area Under Special Queue Length Curve'] += \
-            state['Special Customer Queue Length'] * (clock - data['Last Time Special Customer Queue Length Changed'])
-        state['Special Customer Queue Length'] -= 1
-        # This customer no longer belongs to queue
-        data['Special Queue Customers'].pop(first_customer_in_queue, None)
-        # Queue length just changed. We should update it.
-        data['Last Time Special Queue Length Changed'] = clock
-        # Schedule its specific 'End of Service'.
-        fel_maker(future_event_list, 'Departure From Expert', state, data, clock,
-                  customer_special=first_customer_in_queue,
-                  customer_normal=customer_normal, last_customer='S')
-
-    elif state['Normal Customer Queue Length'] > 0:
-        # who's the first in line?
-        first_customer_in_queue = min(data['Normal Queue Customers'], key=data['Normal Queue Customers'].get)
-        # this customer starts getting service
-        data['Normal Customers'][first_customer_in_queue]['Time Service Begins'] = clock
-        # Update queue waiting time
-        data['Cumulative Stats']['Normal Queue Waiting Time'] += \
-            clock - data['Normal Customers'][first_customer_in_queue]['Arrival Time']
-        if data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] < clock - \
-                data['Normal Customers'][first_customer_in_queue]['Arrival Time']:
-            data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] = clock - \
-                                                                                 data['Normal Customers'][
-                                                                                     first_customer_in_queue][
-                                                                                     'Arrival Time']
-
-        # Queue length changes, so calculate the area under the current rectangle
-        data['Cumulative Stats']['Area Under Normal Queue Length Curve'] += \
-            state['Normal Customer Queue Length'] * (clock - data['Last Time Normal Customer Queue Length Changed'])
-        # Logic
-        state['Normal Customer Queue Length'] -= 1
-        # This customer no longer belongs to queue
-        data['Normal Queue Customers'].pop(first_customer_in_queue, None)
-        # Queue length just changed. Update 'Last Time Queue Length Changed'
-        data['Last Time Normal Queue Length Changed'] = clock
-        # Schedule 'End of Service' for this customer
-        fel_maker(future_event_list, 'Departure From Expert', state, data, clock,
-                  customer_special=customer_special,
-                  customer_normal=first_customer_in_queue, last_customer='C')
-
-    else:
-        # nothing to do
-        state['Specialist Server Status'] -= 1
+    return blank_dataset
 
 
-def Departure_From_Beginner(future_event_list, state, clock, data, customer_special=None,
-                            customer_normal=None,
-                            last_customer=None):
-    # what is shift number
-    if (clock % 1440) // shift_time_1 == 0:
-        shift = 0
-    elif (clock % 1440) // shift_time_1 !=0 and (clock % 1440) // shift_time_2 ==0 :
-        shift = 1
-    else:
-        shift = 2
+def fill_dataset_with_records(dataset, records):
+    for record in records:
+        dataset = pd.concat([dataset, pd.DataFrame([record])], ignore_index=True)
+    return dataset
 
-    data['Cumulative Stats']['Beginner Servers Last Time'] = clock
-    data['Cumulative Stats']['Beginner Servers Busy Time'] += clock - data['Normal Customers'][customer_normal][
-        'Time Service Begins']
-    
-    if clock > overwork_time: #yakhoda
-        data['Cumulative Stats']['Beginner Servers Overworked'] += clock - data['Normal Customers'][customer_normal][
-        'Time Service Begins']
-    data['Normal Customers Waiting Time In System'] += clock - data['Normal Customers'][customer_normal][
-            'Arrival Time']
-    #Yakhoda
-    data['Normal Customers'][customer_normal]['Time Service Ends'] = clock
-
-    # will he use technical service?
-    if Uniform(0, 1) > (1-technical_need_percentage):
-        # he will use technical service
-        data['Normal Customers'][customer_normal]['Arrival Time Technical'] = clock
-        data['Technical Normal Queue Customers All'].add(customer_normal)
-        if state['Technical Server Status'] < num_of_technicals:#ASAP_techincal
-            # technical service begins immediately
-            state['Technical Server Status'] += 1
-            fel_maker(future_event_list, 'Departure From Technical', state, data, clock,
-                      customer_special=customer_special, customer_normal=customer_normal, last_customer='C')
-            data['Normal Customers'][customer_normal]['Time Service Begins Technical'] = clock
-        else:
-            # gets in line in technical service
-            data['Cumulative Stats']['Area Under Technical Normal Queue Length Curve'] += state[
-                                                                                              'Technical Normal Customer Queue Length'] * (
-                                                                                                  clock - data[
-                                                                                              'Last Time Technical Normal Customer Queue Length Changed'])
-            state['Technical Normal Customer Queue Length'] += 1
-            if data['Cumulative Stats']['Max Technical Normal Customer Queue Length'] < state[
-                'Technical Normal Customer Queue Length']:
-                data['Cumulative Stats']['Max Technical Normal Customer Queue Length'] = state[
-                    'Technical Normal Customer Queue Length']
-            data['Technical Normal Queue Customers'][customer_normal] = clock
-            data['Technical Normal Queue Customers All'].add(customer_normal)
-            data['Last Time Technical Normal Customer Queue Length Changed'] = clock
-
-    # Now we go to check the lines and other stuff
-    if state['Normal Customer Queue Length'] > 0:
-        # who's the first in line?
-        first_customer_in_queue = min(data['Normal Queue Customers'], key=data['Normal Queue Customers'].get)
-        # this customer starts getting service
-        data['Normal Customers'][first_customer_in_queue]['Time Service Begins'] = clock
-        # Update queue waiting time
-        data['Cumulative Stats']['Normal Queue Waiting Time'] += \
-            clock - data['Normal Customers'][first_customer_in_queue]['Arrival Time']
-        if data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] < clock - \
-                data['Normal Customers'][first_customer_in_queue]['Arrival Time']:
-            data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] = clock - \
-                                                                                 data['Normal Customers'][
-                                                                                     first_customer_in_queue][
-                                                                                     'Arrival Time']
-        # Queue length changes, so calculate the area under the current rectangle
-        data['Cumulative Stats']['Area Under Normal Queue Length Curve'] += \
-            state['Normal Customer Queue Length'] * (clock - data['Last Time Normal Customer Queue Length Changed'])
-        state['Normal Customer Queue Length'] -= 1
-        # This customer no longer belongs to queue
-        data['Normal Queue Customers'].pop(first_customer_in_queue, None)
-        # Queue length just changed. Update 'Last Time Queue Length Changed'
-        data['Last Time Normal Queue Length Changed'] = clock
-        # Schedule its specific 'End of Service' for this customer
-        fel_maker(future_event_list, 'Departure From Beginner', state, data, clock,
-                  customer_special=customer_special,
-                  customer_normal=first_customer_in_queue, last_customer='C')
-
-    else:
-        state['Beginner Server Status'] -= 1
-
-
-def Departure_From_Technical(future_event_list, state, clock, data, customer_special=None,
-                             customer_normal=None,
-                             last_customer=None):
-    data['Cumulative Stats']['Technical Servers Last Time'] = clock
-    if last_customer == 'S':
-        data['Cumulative Stats']['Technical Servers Busy Time'] += clock - data['Special Customers'][customer_special][
-            'Time Service Begins Technical']
-        data['Special Customers Waiting Time In System'] += clock - data['Special Customers'][customer_special][
-            'Arrival Time Technical']
-        if clock > overwork_time: #yakhoda
-            data['Cumulative Stats']['Technical Servers Overworked'] += clock - data['Special Customers'][customer_special][
-            'Time Service Begins Technical']
-    else:
-        # customer is normal
-        data['Cumulative Stats']['Technical Servers Busy Time'] += clock - data['Normal Customers'][customer_normal][
-            'Time Service Begins Technical']
+def make_record(list_of_list, list_p):
+    records_to_be_added = []
+    for i in range(len(list_of_list)):
+        records_to_be_added.append({'system num': i, 'data points': list_of_list[i], 'p':list_p[i]})
         
-        data['Normal Customers Waiting Time In System'] += clock - data['Normal Customers'][customer_normal][
-            'Arrival Time Technical']
-        #Yakhoda
-        if clock > overwork_time:#yakhoda
-            data['Cumulative Stats']['Technical Servers Overworked'] += clock - data['Normal Customers'][customer_normal][
-            'Time Service Begins Technical']
-    # now we go check the line
-    if state['Technical Special Customer Queue Length'] > 0:
-        # who's the first in line?
-        first_customer_in_queue = min(data['Technical Special Queue Customers'],
-                                      key=data['Technical Special Queue Customers'].get)
-        # this customer starts getting service
-        data['Special Customers'][first_customer_in_queue]['Time Service Begins Technical'] = clock
-        # Update queue waiting time
-        data['Cumulative Stats']['Technical Special Queue Waiting Time'] += \
-            clock - data['Special Customers'][first_customer_in_queue]['Arrival Time Technical']
-        if data['Cumulative Stats']['Max Technical Special Customer Queue Waiting Time'] < clock - \
-                data['Special Customers'][first_customer_in_queue]['Arrival Time Technical']:
-            data['Cumulative Stats']['Max Technical Special Customer Queue Waiting Time'] = clock - \
-                                                                                            data['Special Customers'][
-                                                                                                first_customer_in_queue][
-                                                                                                'Arrival Time Technical']
-        # Queue length changes, so calculate the area under the current rectangle
-        data['Cumulative Stats']['Area Under Technical Special Queue Length Curve'] += \
-            state['Technical Special Customer Queue Length'] * (
-                    clock - data['Last Time Technical Special Customer Queue Length Changed'])
-        # Logic
-        state['Technical Special Customer Queue Length'] -= 1
-        # This customer no longer belongs to queue
-        data['Technical Special Queue Customers'].pop(first_customer_in_queue, None)
-        # Queue length just changed. Update 'Last Time Queue Length Changed'
-        data['Last Time Technical Special Customer Queue Length Changed'] = clock
-        # Schedule its specific 'End of Service' for this customer
-        fel_maker(future_event_list, 'Departure From Technical', state, data, clock,
-                  customer_special=first_customer_in_queue,
-                  customer_normal=customer_normal, last_customer='S')
+    return records_to_be_added
 
-    elif state['Technical Normal Customer Queue Length'] > 0:
-        # who's the first in line?
-        first_customer_in_queue = min(data['Technical Normal Queue Customers'],
-                                      key=data['Technical Normal Queue Customers'].get)
-        # this customer starts getting service
-        data['Normal Customers'][first_customer_in_queue]['Time Service Begins Technical'] = clock
-        # Update queue waiting time
-        data['Cumulative Stats']['Technical Normal Queue Waiting Time'] += \
-            clock - data['Normal Customers'][first_customer_in_queue]['Arrival Time Technical']
-        if data['Cumulative Stats']['Max Technical Normal Customer Queue Waiting Time'] < clock - \
-                data['Normal Customers'][first_customer_in_queue]['Arrival Time Technical']:
-            data['Cumulative Stats']['Max Technical Normal Customer Queue Waiting Time'] = clock - \
-                                                                                           data['Normal Customers'][
-                                                                                               first_customer_in_queue][
-                                                                                               'Arrival Time Technical']
-        # Queue length changes, so calculate the area under the current rectangle
-        data['Cumulative Stats']['Area Under Technical Normal Queue Length Curve'] += \
-            state['Technical Normal Customer Queue Length'] * (
-                    clock - data['Last Time Technical Normal Customer Queue Length Changed'])
-        # Logic
-        state['Technical Normal Customer Queue Length'] -= 1
-        # This customer no longer belongs to queue
-        data['Technical Normal Queue Customers'].pop(first_customer_in_queue, None)
-        # Queue length just changed. Update 'Last Time Queue Length Changed'
-        data['Last Time Technical Normal Customer Queue Length Changed'] = clock
-        # Schedule its 'End of Service' for this customer
-        fel_maker(future_event_list, 'Departure From Technical', state, data, clock,
-                  customer_special=customer_special,
-                  customer_normal=first_customer_in_queue, last_customer='C')
+
+def fill_ot_distance(df, Xi, cost_matrix, num_of_iterations, lambda_pen):
+    for i in range(len(df)):
+        for j in range(i):
+            
+            OT_plan_test = ot.bregman.sinkhorn(df['p'][i].transpose().tolist()[0], df['p'][j].transpose().tolist()[0], cost_matrix, lambda_pen, method='sinkhorn', numItermax=num_of_iterations, stopThr=1e-09, verbose=False, log=False, warn=True, warmstart=None)
+            OT_cost_test = np.multiply(OT_plan_test, cost_matrix).sum() - lambda_pen*entropy(OT_plan_test)
+            df[str(i)][j] = OT_cost_test
+            
+            
+def calc_barycenter(df, cost_matrix, lambda_value):
+    list_p_cluster =  [i.transpose()[0] for i in df['p']]
+    matrix_p = np.column_stack(list_p_cluster)
+    return ot.barycenter(matrix_p, cost_matrix, lambda_value, weights=None, method='sinkhorn', numItermax=200, stopThr=0.0001, verbose=False, log=False, warn=True)
+
+
+def condensed_creator(arr):
+    m = arr.shape[0]
+
+    # Extract upper triangle indices
+    upper_triangle_indices = np.triu_indices(m, k=1)
+
+    # Use the indices to get the upper triangle elements
+    upper_triangle_elements = arr[upper_triangle_indices]
+
+    # Convert the elements to a list if needed
+    upper_triangle_list = upper_triangle_elements.tolist()
+
+    # Print or use the resulting list as needed
+    return upper_triangle_list
+
+def plot_dendrogram(df, save_file=False):
+    columns_to_filter = [str(i) for i in range(len(df))]
+    df_filter = df[columns_to_filter]
+    filled_df = df_filter.fillna(0)
+    matrix = filled_df.values
+    matrix_final = matrix + matrix.transpose()
+    
+    scaled_matrix = matrix_final
+    np.fill_diagonal(scaled_matrix, 0)
+    
+    matrix_final = condensed_creator(scaled_matrix)
+    linkage_matrix = linkage(matrix_final, method='complete')
+    
+    plt.figure(figsize=(10, 7))
+    dendrogram(linkage_matrix, color_threshold=-np.inf, above_threshold_color='gray')
+    plt.xlabel('Systems')  # Set the x-axis label to 'System'
+    plt.xticks([])  # Remove x-axis tick labels
+    plt.ylabel('Distance')
+    if save_file:
+        plt.savefig('plot_dendrogram.png', format='png', dpi=1000)
+    plt.show()
+    
+    
+def silhouette_score_agglomerative(df):
+    columns_to_filter = [str(i) for i in range(len(df))]
+    df_filter = df[columns_to_filter]
+    filled_df = df_filter.fillna(0)
+    matrix = filled_df.values
+    matrix_final = matrix + matrix.transpose()
+    min_val = np.min(matrix)
+    max_val = np.max(matrix)
+    scaled_matrix = (matrix_final - min_val)
+    np.fill_diagonal(scaled_matrix, 0)
+    silhouette_score_list = []
+    for i in range(2, len(df)):
+        index_list = cluster_list_creator(df, i)
+        silhouette_score_list.append(silhouette_score(scaled_matrix, index_list, metric='precomputed'))
+    return silhouette_score_list
+
+def entropy(matrix):
+    matrix = np.array(matrix)
+    non_zero_entries = matrix[matrix > 0]
+    entropy_value = -np.sum(non_zero_entries * np.log(non_zero_entries))
+
+    return entropy_value
+
+def cluster_list_creator(df, num_of_clusters):
+    
+    columns_to_filter = [str(i) for i in range(len(df))]
+    df_filter = df[columns_to_filter]
+    filled_df = df_filter.fillna(0)
+    matrix = filled_df.values
+    matrix_final = matrix + matrix.transpose()
+    
+    min_val = np.min(matrix)
+    max_val = np.max(matrix)
+    scaled_matrix = matrix_final
+    np.fill_diagonal(scaled_matrix, 0)
+    matrix_final = condensed_creator(scaled_matrix)
+
+    linkage_matrix = linkage(matrix_final, method='complete')
+    
+    
+    height = np.shape(linkage_matrix)[0]
+    list_linkage = [[i] for i in range(len(df))]
+    for i in range(height):
+        list_linkage.append(list_linkage[int(linkage_matrix[i][0])] + list_linkage[int(linkage_matrix[i][1])])
+        
+        
+    
+    list_linkage_inverse = list_linkage[::-1]
+    list_final = list_linkage_inverse[num_of_clusters-1:]
+    list_index = []
+    for i in range(len(df)):
+        for j in list_final:
+            if i in j:
+                list_index.append(list_final.index(j))
+                break
+
+    return list_index
+
+def calculate_OT_cost(p, q, reg, cost_matrix, num_iterations, stop_theshold):
+    p = np.array([p]).T
+    q = np.array([q]).T
+    Xi = np.exp(-cost_matrix / reg)
+    v_n = np.ones((Xi.shape[1], 1))
+    v_old = v_n
+    for _ in range(num_iterations):
+        v_n = q / (Xi.T @ (p / (Xi @ v_n)))
+        if np.linalg.norm(v_n  - v_old)<stop_theshold:
+            break
+        v_old = v_n
+    diag_u = np.diagflat((p / (Xi @ v_n)))
+    diag_v = np.diagflat(v_n)
+    OT_plan = diag_u @ Xi @ diag_v
+    OT_cost = np.multiply(OT_plan, cost_matrix).sum()
+    return OT_plan
+
+
+def fill_ot_distance(df, num_of_iterations, lambda_pen, stop_theshold):
+    for i in range(len(df)):# Here we iterate among rows, and below we shall calculate the densities
+        for j in range(i+1):
+
+            cost_matrix = distance.cdist(df['data points'][i], df['data points'][j])
+            min_time = time.time()
+            OT_plan_test = calculate_OT_cost(df['p'][i], df['p'][j], lambda_pen, cost_matrix, num_of_iterations, stop_theshold)            
+            OT_cost_test = np.multiply(OT_plan_test, cost_matrix).sum()  #yakhoda
+            max_time = time.time()
+            df[str(i)][j] = OT_cost_test
+    
+
+    
+
+def normalize_tuples(list_of_lists):
+    num_dimensions = len(list_of_lists[0][0])  # Get the number of dimensions from the first tuple
+    
+    # Extract all values for each dimension
+    all_values = [[] for _ in range(num_dimensions)]
+    for sublist in list_of_lists:
+        for i, t in enumerate(sublist):
+            for j in range(num_dimensions):
+                all_values[j].append(t[j])
+    
+    # Compute the minimum and maximum values for each dimension
+    min_values = [min(dim_values) for dim_values in all_values]
+    max_values = [max(dim_values) for dim_values in all_values]
+    
+    # Normalize each dimension of each tuple
+    normalized_list_of_lists = []
+    for sublist in list_of_lists:
+        normalized_sublist = []
+        for t in sublist:
+            normalized_t = tuple((t[j] - min_values[j]) / (max_values[j] - min_values[j]) for j in range(num_dimensions))
+            normalized_sublist.append(normalized_t)
+        normalized_list_of_lists.append(normalized_sublist)
+    
+    return normalized_list_of_lists
+
+
+def list_of_lists_to_json(list_of_lists):
+    json_data = {}
+
+    for idx, lst in enumerate(list_of_lists):
+        json_data[idx + 1] = {
+            'id': idx + 1,
+            'data points': lst
+        }
+    
+    json_output = json.dumps(json_data, indent=4)
+    
+    return json_output
+def json_content_to_list_of_lists(json_content):
+    json_data = json.loads(json_content)
+    
+    list_of_lists = []
+    for key in sorted(json_data.keys(), key=int):
+        list_of_lists.append([tuple(item) for item in json_data[key]['data points']])
+    
+    return list_of_lists
+
+
+
+
+def list_to_array(*lst):
+    r""" Convert a list if in numpy format """
+    lst_not_empty = [a for a in lst if len(a) > 0 and not isinstance(a, list)]
+
+    if len(lst_not_empty) == 0:
+        type_as = np.zeros(0)
+
     else:
-        state['Technical Server Status'] -= 1
-
-
-def Leaving_Of_Tired(future_event_list, state, clock, data, customer_special=None, customer_normal=None,
-                     last_customer=None):
-    if last_customer == 'S':
-        data['Special Customers Waiting Time In System'] += clock - data['Special Customers'][
-            customer_special]['Arrival Time']
-        # customer is special
-        # here we check if service for this customer has begun
-        if 'Time Service Begins' in data['Special Customers'][customer_special].keys():
-            # The Service has begun and we do nothing if so.
-            True
-        else:
-            # this customer is one that leaves
-            # Update queue waiting time
-            data['Cumulative Stats']['Special Queue Waiting Time'] += \
-                clock - data['Special Customers'][customer_special]['Arrival Time']
-            if data['Cumulative Stats']['Max Special Customer Queue Waiting Time'] < clock - \
-                    data['Special Customers'][customer_special]['Arrival Time']:
-                data['Cumulative Stats']['Max Special Customer Queue Waiting Time'] = clock - data['Special Customers'][
-                    customer_special]['Arrival Time']
-            # Queue length changes, so calculate the area under the current rectangle
-            data['Cumulative Stats']['Area Under Special Queue Length Curve'] += \
-                state['Special Customer Queue Length'] * (
-                        clock - data['Last Time Special Customer Queue Length Changed'])
-            # Logic
-            state['Special Customer Queue Length'] -= 1
-            # This customer no longer belongs to queue
-            data['Special Queue Customers'].pop(customer_special, None)
-            # Queue length just changed. Update 'Last Time Queue Length Changed'
-            data['Last Time Special Queue Length Changed'] = clock
-            data['Cumulative Stats']['Customer Churn'] += 1
-            data['Special Customers'][customer_special]['Leave Time'] = clock
-
-
+        type_as = lst_not_empty[0]
+    if len(lst) > 1:
+        return [np.from_numpy(np.array(a), type_as=type_as)
+                if isinstance(a, list) else a for a in lst]
     else:
-        # customer is normal
-        # here we check if service for this customer has begun
-        if 'Time Service Begins' in data['Normal Customers'][customer_normal].keys():
-            # The Service has begun and we do nothing if so.
-            True
+        if isinstance(lst[0], list):
+            return np.from_numpy(np.array(lst[0]), type_as=type_as)
         else:
-            # this customer is one that leaves
-            # Update queue waiting time
-            data['Cumulative Stats']['Normal Queue Waiting Time'] += \
-                clock - data['Normal Customers'][customer_normal]['Arrival Time']
-            if data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] < clock - \
-                    data['Normal Customers'][customer_normal]['Arrival Time']:
-                data['Cumulative Stats']['Max Normal Customer Queue Waiting Time'] = clock - \
-                                                                                     data['Normal Customers'][
-                                                                                         customer_normal][
-                                                                                         'Arrival Time']
-            # Queue length changes, so calculate the area under the current rectangle
-            data['Cumulative Stats']['Area Under Normal Queue Length Curve'] += \
-                state['Normal Customer Queue Length'] * (
-                        clock - data['Last Time Normal Customer Queue Length Changed'])
-            # Logic
-            state['Normal Customer Queue Length'] -= 1
-            # This customer no longer belongs to queue
-            data['Normal Queue Customers'].pop(customer_normal, None)
-            # Queue length just changed. Update 'Last Time Queue Length Changed'
-            data['Last Time Normal Queue Length Changed'] = clock
-            data['Cumulative Stats']['Customer Churn'] += 1
-            data['Normal Customers'][customer_normal]['Leave Time'] = clock
+            return lst[0]
+        
+        
+def geometricBar(weights, alldistribT):
+    """return the weighted geometric mean of distributions"""
+    weights, alldistribT = list_to_array(weights, alldistribT)
+    assert (len(weights) == alldistribT.shape[1])
+    return np.exp(np.dot(np.log(alldistribT), weights.T))
 
 
+def geometricMean(alldistribT):
+    """return the  geometric mean of distributions"""
+    alldistribT = list_to_array(alldistribT)
+    return np.exp(np.mean(np.log(alldistribT), axis=1))
 
 
+def barycenter_sinkhorn(A, M, reg, weights=None, numItermax=1000,
+                        stopThr=1e-4, verbose=False, log=False, warn=True):
+    A, M = list_to_array(A, M)
 
+    if weights is None:
+        weights = np.ones((A.shape[1],), dtype=A.dtype) / A.shape[1]
+    else:
+        assert (len(weights) == A.shape[1])
 
-def simulation(simulation_time):
-    state, future_event_list, data = starting_state()
-    clock = 0
+    if log:
+        log_dict = {'err': []}
 
+    K = np.exp(-M / reg)
 
-    work_time = 8*60 #change1
-    future_event_list.append(
-        {'Event Type': 'End of Simulation', 'Event Time': simulation_time, 'Special Customer': None,
-         'Normal Customer': None, 'Last Customer': None})
+    err = 1
+
+    UKv = np.dot(K, (A.T / np.sum(K, axis=0)).T)
+    u = (geometricMean(UKv) / UKv.T).T
+    for ii in range(numItermax):
+
+        v =  (A / np.dot(K, u))
+        ps = np.tile(geometricBar(weights, UKv), (A.shape[1], 1)).T
+        UKv = u * np.dot(K.T, v)
+        u = ps/np.dot(K, v)
+        
+            
+            
+            
+        if ii % 10 == 1:
+            err = np.sum(np.std(UKv, axis=1))
+
+            if log:
+                log_dict['err'].append(err)
+
+            if err < stopThr:
+                break
+            if verbose:
+                if ii % 200 == 0:
+                    print('{:5s}|{:12s}'.format('It.', 'Err') + '\n' + '-' * 19)
+                print('{:5d}|{:8e}|'.format(ii, err))
+    else:
+        if warn:
+            warnings.warn("Sinkhorn did not converge. You might want to "
+                          "increase the number of iterations `numItermax` "
+                          "or the regularization parameter `reg`.")
+    if log:
+        log_dict['niter'] = ii
+        return geometricBar(weights, UKv), log_dict
+    else:
+        return geometricBar(weights, UKv)
     
-
-    while clock < simulation_time:
-
-
-        sorted_fel = sorted(future_event_list, key=lambda x: x['Event Time'])
-
-        current_event = sorted_fel[0]
-        clock = current_event['Event Time']
-        customer_special = current_event['Special Customer']
-        customer_normal = current_event['Normal Customer']
-        last_customer = current_event['Last Customer']
-        if clock < simulation_time:
-            if current_event['Event Type'] == 'Customer Call' and  clock<work_time:     #yakhoda
-                Customer_Call(future_event_list, state, clock, data,
-                              customer_special=customer_special,
-                              customer_normal=customer_normal, last_customer=last_customer)
-            elif current_event['Event Type'] == 'Departure From Expert':
-                Departure_From_Expert(future_event_list, state, clock, data,
-                                      customer_special=customer_special,
-                                      customer_normal=customer_normal, last_customer=last_customer)
-            elif current_event['Event Type'] == 'Departure From Beginner':
-                Departure_From_Beginner(future_event_list, state, clock, data,
-                                        customer_special=customer_special,
-                                        customer_normal=customer_normal, last_customer=last_customer)
-            elif current_event['Event Type'] == 'Departure From Technical':
-                Departure_From_Technical(future_event_list, state, clock, data,
-                                         customer_special=customer_special,
-                                         customer_normal=customer_normal, last_customer=last_customer)
-            elif current_event['Event Type'] == 'Leaving Of Tired':
-                Leaving_Of_Tired(future_event_list, state, clock, data,
-                                 customer_special=customer_special,
-                                 customer_normal=customer_normal, last_customer=last_customer)
-            future_event_list.remove(current_event)
-        else:
-            future_event_list.clear()
-        if clock < warmup_point:
-            for key in data['Cumulative Stats']:
-                data['Cumulative Stats'][key] = 0
-    print('Simulation Ended!')
-    if data['Technical Special Queue Customers All'] == set():
-        data['Technical Special Queue Customers All'] = {-1}
-    if data['Technical Normal Queue Customers All'] == set():
-        data['Technical Normal Queue Customers All'] = {-1}
-    customer_churn = data['Cumulative Stats']['Customer Churn'] / (
-                len(data['Special Queue Customers All']) + len(data['Normal Queue Customers All']))
+    
+def calc_barycenter(df, cost_matrix, lambda_value):
+    list_p_cluster =  [i for i in df['p']]
+    matrix_p = np.column_stack(list_p_cluster)
+    return barycenter_sinkhorn(matrix_p, cost_matrix, lambda_value, weights=None, numItermax=200, stopThr=0.0001, verbose=False, log=False, warn=True)
 
 
-    special_service_starters = (len(
-        data['Special Service Starters'].intersection(data['Special Service Starters Technical']))) / (len(
-        data['Special Queue Customers All']))
-    max_special_customer_queue_length = data['Cumulative Stats']['Max Special Customer Queue Length']
-    max_normal_customer_queue_length = data['Cumulative Stats']['Max Normal Customer Queue Length']
+def dataframe_to_json(df, columns=None):
+    """
+    Convert a pandas DataFrame to a JSON format where each row index maps to a dictionary 
+    of column names and their corresponding values.
+
+    Parameters:
+    df (pandas.DataFrame): The DataFrame to convert.
+
+    Returns:
+    str: JSON string representing the DataFrame.
+    """
+    # Convert DataFrame to dictionary format
+    if columns==None:
+        df_dict = df.to_dict(orient='index')
+    else:
+        df_dict = df[columns].to_dict(orient='index')
+    for row in df_dict.values():
+        for key, value in row.items():
+            if isinstance(value, np.ndarray):
+                row[key] = value.tolist()
+    # Convert dictionary to JSON
+    json_result = json.dumps(df_dict, indent=4)
+    
+    return json_result
 
 
-    max_special_customer_technical_queue_length = data['Cumulative Stats'][
-        'Max Technical Special Customer Queue Length']
-    max_normal_customer_technical_queue_length = data['Cumulative Stats']['Max Technical Normal Customer Queue Length']
-    mean_special_customer_queue_length = data['Cumulative Stats'][
-                                             'Area Under Special Queue Length Curve'] / (simulation_time - warmup_point)
-    mean_normal_customer_queue_length = data['Cumulative Stats'][
-                                            'Area Under Normal Queue Length Curve'] / (simulation_time - warmup_point)
-    mean_special_customer_technical_queue_length = data['Cumulative Stats'][
-                                                       'Area Under Technical Special Queue Length Curve'] / (simulation_time - warmup_point)
-    mean_normal_customer_technical_queue_length = data['Cumulative Stats'][
-                                                      'Area Under Technical Normal Queue Length Curve'] / (simulation_time - warmup_point)
 
-    max_special_customer_queue_waiting_time = data['Cumulative Stats']['Max Special Customer Queue Waiting Time']
-    max_normal_customer_queue_length_waiting_time = data['Cumulative Stats']['Max Normal Customer Queue Waiting Time']
+def cluster_distributions(dist_file,  reg=0.5, n_clusters=None, calculate_barycenter=False, stop_theshold=10**-9, num_of_iterations=1000, plt_dendrogram=True):
+    list_sim_outputs_raw = json_content_to_list_of_lists(dist_file)    
+    list_base = merge_list(list_sim_outputs_raw)
+    list_sim_outputs = []
+    p_list = []
+    for i in list_sim_outputs_raw:
+        list_sim_outputs.append(density_calc(i, i)[0])
+        p_list.append(density_calc(i, i)[1])
+    
+    normalized_list_sim_outputs = normalize_tuples(list_sim_outputs)
+    m = len(normalized_list_sim_outputs)
+    blank_df = create_blank_dataset_with_metadata(m)
+    df = fill_dataset_with_records(blank_df, make_record(normalized_list_sim_outputs, p_list))
+    # Display the filled dataset
+    df['data points real'] = list_sim_outputs
+    fill_ot_distance(df, num_of_iterations, reg, stop_theshold)
+    if plt_dendrogram:
+        plot_dendrogram(df, save_file=False) 
+    sil_values = silhouette_score_agglomerative(df)
+#     print(df['47'][0])
+    if n_clusters==None:# if cluster_num is none then max_silhouette index will be considered, else the number that is wanted
+        n_clusters = sil_values.index(max(sil_values)) + 2
+    
+    columns_to_filter = [str(i) for i in range(len(df))]
+    df_filter = df[columns_to_filter]
+    filled_df = df_filter.fillna(0)
+    matrix = filled_df.values
+    diagonal = np.diagonal(matrix)
+    matrix_final = matrix + matrix.transpose() 
+    np.fill_diagonal(matrix_final, 0)
+    # Below we get the linkage matrix, which will be used in many parts
+    upper_triangle_flat = matrix_final[np.triu_indices_from(matrix_final, k=1)]    
+    Z = hierarchy.linkage(upper_triangle_flat, method='complete') 
+    clusters = hierarchy.fcluster(Z, n_clusters, criterion='maxclust')
+    df['cluster'] = clusters
+    print(clusters.tolist())
+    
+    # Here the dataset for clusters is generated
+    blank_df_clusters = create_blank_dataset_with_metadata(n_clusters)
+    records_to_be_added =[]
+    for i in range(1,n_clusters+1):
+        records_to_be_added.append({'cluster num': i, 'p':0})
+    df_clusters = fill_dataset_with_records(blank_df_clusters, records_to_be_added)    
+    
+    
+    list_p_cluster_new = []
+    list_sup_cluster_new = []
+    list_sup_cluster_real_new = []
+    for i in range(1, len(df_clusters)+1):
+        df_test  = df[df['cluster']==i]
+        list_column = df_test['data points']
+        list_sim_outputs_cluster = list_column.tolist()
+        list_base_cluster = merge_list(list_sim_outputs_cluster)
 
-    max_special_customer_technical_queue_waiting_time = data['Cumulative Stats'][
-        'Max Technical Special Customer Queue Waiting Time']
-    max_normal_customer_technical_queue_waiting_time = data['Cumulative Stats'][
-        'Max Technical Normal Customer Queue Waiting Time']
-    mean_special_customer_queue_waiting_time = data['Cumulative Stats']['Special Queue Waiting Time'] / len(
-        data['Special Queue Customers All'])
-    mean_normal_customer_queue_waiting_time = data['Cumulative Stats']['Normal Queue Waiting Time'] / len(
-        data['Normal Queue Customers All'])
+        list_column_real = df_test['data points real']
+        list_sim_outputs_cluster_real = list_column_real.tolist()
+        list_base_cluster_real = merge_list(list_sim_outputs_cluster_real)
 
-    mean_special_customer_technical_queue_waiting_time = data['Cumulative Stats'][
-                                                             'Technical Special Queue Waiting Time'] / len(
-        data['Technical Special Queue Customers All'])
-    mean_normal_customer_technical_queue_waiting_time = data['Cumulative Stats'][
-                                                            'Technical Normal Queue Waiting Time'] / len(
-        data['Technical Normal Queue Customers All'])
-    mean_special_customer_waiting_time_in_system = data['Special Customers Waiting Time In System'] / (
-        len(data['Special Queue Customers All']))
-    mean_normal_customer_waiting_time_in_system = data['Normal Customers Waiting Time In System'] / (
-        len(data['Normal Queue Customers All']))
 
-    specialist_servers_utilization = data['Cumulative Stats']['Specialist Servers Busy Time'] / (num_of_specialists * data['Cumulative Stats']['Specialist Servers Last Time']) # ASAP_specialist #yakhoda
-    beginner_servers_utilization = data['Cumulative Stats']['Beginner Servers Busy Time'] / (num_of_beginners * data['Cumulative Stats']['Beginner Servers Last Time']) # ASAP_beginner  #yakhoda         
-    technical_servers_utilization = data['Cumulative Stats']['Technical Servers Busy Time'] / (num_of_technicals * data['Cumulative Stats']['Technical Servers Last Time']) # ASAP_techinal #yakhoda
+
+
+
+        cost_matrix_cluster = distance.cdist(list_base_cluster, list_base_cluster)
+        density_list_cluster = density_calc_list(list_sim_outputs_cluster, list_base_cluster)
+        df_test['p'] = density_list_cluster
+        list_p_cluster_new.append(calc_barycenter(df_test, cost_matrix_cluster, reg))
+        list_sup_cluster_new.append(list_base_cluster)
+        list_sup_cluster_real_new.append(list_base_cluster_real)
+        
+    df_clusters['p'] = list_p_cluster_new
+    df_clusters['data points'] = list_sup_cluster_new
+    df_clusters['data points real'] = list_sup_cluster_real_new
+    json_inputs =  dataframe_to_json(df, ['system num', 'data points real', 'cluster'])
+    json_barycenters = dataframe_to_json(df_clusters,['data points real', 'p'])
 
     
-    specialist_servers_overwork = data['Cumulative Stats']['Specialist Servers Overworked'] /num_of_specialists
-    beginner_servers_overwork = data['Cumulative Stats']['Beginner Servers Overworked'] / num_of_beginners
-    technical_servers_overwork = data['Cumulative Stats']['Technical Servers Overworked'] / num_of_technicals
-
-    
-
-    return data
-
-
-
-
+    return json_inputs, json_barycenters 
